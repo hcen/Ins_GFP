@@ -1,0 +1,232 @@
+---
+title: "plots"
+author: "Howard Cen"
+date: "2024-10-10"
+output: html_document
+---
+
+```{r}
+
+library(tidyverse)
+library(ggrepel)
+library(readxl)
+
+df <- read_excel("output/betaInsGFP_proteomics_limma_DE_results_pos_neg_filterN3.xlsx")
+View(df)
+colnames(df)
+
+df$Protein.Names <- gsub("_.*","",df$Protein.Names)
+
+plot.volcano(df = df, 
+             p_col = "adj.P.Val",
+             p_cutoff = 0.05,
+             log2FC_col = "logFC",
+             log2FC_cutoff = 0,
+             gene_num = 20,
+             gene_col = "Protein.Names", 
+             vs = "GFP.Positive_Negative",  # E.g. "0.75_0"
+             name = "betaInsGFP") # E.g. "islet" or "stem"
+
+plot.volcano <- function(df, p_col, p_cutoff, log2FC_col, log2FC_cutoff, gene_num, gene_col, vs, name){
+  
+  df <- df %>% 
+    mutate(log_padj = -log10(!!rlang::sym(p_col)))
+  #           sign_p = -log10(!!rlang::sym(p_col)) * sign(!!rlang::sym(log2FC_col)))
+  
+  # select top or neg x genes to label
+  pos_label <- df[order(df[[p_col]]), ] %>% 
+    filter(!!rlang::sym(log2FC_col) > 0) %>%
+    slice_head(n = gene_num) %>%
+    pull(gene_col)
+  
+  neg_label <- df[order(df[[p_col]]), ] %>% 
+    filter(!!rlang::sym(log2FC_col) < 0) %>%
+    slice_head(n = gene_num) %>%
+    pull(gene_col)
+  
+  label_genes <- c(pos_label,neg_label)
+  
+  df <- df %>%
+    mutate(label = ifelse(!!rlang::sym(gene_col) %in% label_genes, !!rlang::sym(gene_col), ""))
+  
+  #write.csv(df, paste0("output/volcano_RNAseq_", name, ".csv"), row.names = F)
+  
+  df.inf <- df
+  df.inf[!is.finite(df$log_padj), "log_padj"] <- max(df$log_padj[is.finite(df$log_padj)]) * 1.08
+  
+  df_pos <- df.inf[df.inf[[log2FC_col]] > log2FC_cutoff & df.inf[[p_col]] < p_cutoff,]
+  df_neg <- df.inf[df.inf[[log2FC_col]] < -log2FC_cutoff & df.inf[[p_col]] < p_cutoff,]
+  
+  df_ns <- df.inf[!df.inf[[gene_col]] %in% c(df_pos[[gene_col]], df_neg[[gene_col]]), ]
+  
+  
+  
+  p <- ggplot(data=df.inf, #[plot.df$adj.p<0.05,],
+              aes(x = !!rlang::sym(log2FC_col), y = log_padj 
+              )) +
+    ylab(expression('-log10 adj.Pvalue')) + #-log[10]~(adj.~P~value)
+    xlab(paste0("log2(", gsub("_","/",vs),")")) +
+    geom_point(data = df_ns,
+               size = 2.5,
+               color = "grey", stroke = 0, alpha = 0.6) +
+    geom_point(data = df_pos,
+               size = 2.5,
+               color = "red3", stroke = 0, alpha = 0.6) +
+    geom_point(data = df_neg,
+               size = 2.5,
+               color = "blue3", stroke = 0, alpha = 0.6) +
+    #geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+    
+    #ylim(c(NA, max((-log10( df[is.finite(-log10(df[[p_col]])),][[p_col]])))*1.3)) +
+    
+    ggrepel::geom_text_repel(
+      data = df_pos, 
+      aes(label = label),
+      color="red3",
+      size=4,
+      nudge_x =  max(df[[log2FC_col]]) + max(abs(min(df[[log2FC_col]])),abs(max(df[[log2FC_col]])))*0.3 - df_pos[[log2FC_col]],
+      segment.size=0.1, 
+      #segment.color="grey", 
+      direction="y", 
+      hjust= 1, # adjusting this somehow reduced overlap
+      #max.iter = 100000,
+      max.overlaps = Inf) +
+    
+    ggrepel::geom_text_repel(
+      data = df_neg, 
+      aes(label = label),
+      color="blue3",
+      size=4,
+      nudge_x =  min(df[[log2FC_col]]) - max(abs(min(df[[log2FC_col]])),abs(max(df[[log2FC_col]])))*0.3 - df_neg[[log2FC_col]],
+      segment.size=0.1, 
+      #segment.color="grey", 
+      direction="y", 
+      hjust= 0, # adjusting this somehow reduced overlap
+      #max.iter = 100000,
+      max.overlaps = Inf) +
+    
+    #ggtitle(name) +
+    
+    coord_cartesian(clip = "off") +
+    
+    theme(legend.position = "right",
+          legend.title = element_text(hjust = 0, # left align
+                                      margin = margin(t = 15, unit = "pt")) # add more space on top of legend titles
+          #legend.spacing.y = unit(1,"cm")
+    ) +
+    theme(panel.grid.minor.y = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          text=element_text(size=14),
+          axis.text=element_text(size=12),
+          axis.title=element_text(size=14),
+          legend.text=element_text(size=14),
+          legend.title=element_text(size=14),
+          aspect.ratio = 1/1.2, panel.grid.major = element_blank(),
+          panel.background = element_blank(), axis.line = element_line(colour = "black")) + 
+    theme(plot.title = element_text(hjust = 0.5, face = "italic", colour="grey30", size=15))
+  
+  fpath <- paste0("figures/volcano_", name, "_", vs)
+  
+  p
+  ggsave(paste0(fpath,".pdf"), height = 5.5, width = 5.5, units = "in")
+  
+  p
+  ggsave(paste0(fpath,".svg"), height = 5.5, width = 5.5, units = "in")
+}
+
+```
+
+```{r}
+de <- read_excel("output/betaInsGFP_proteomics_limma_DE_results_high_low_filterN3.xlsx")
+View(de)
+pro <- read.csv("output/betaInsGFP_proteomics_log2_norm_nonimpute_ordered.csv", row.names = 1)
+View(pro)
+
+de.df <- de[de$adj.P.Val<0.05,]
+
+df.pro <- pro %>%
+  filter(Protein.Group %in% de.df$Protein.Group) %>%
+  pivot_longer(cols = grep("GFP", colnames(pro)), names_to = 'samples', values_to = 'levels' ) %>%
+  mutate(Group = gsub("[A-z][0-9]_", "",samples),
+         Protein.Names = gsub("_.*", "", Protein.Names)) %>%
+  filter(Group != "NegGFP") %>%
+  na.omit()
+
+View(df.pro)
+
+df.wide <- pro[match(de.df$Protein.Group, pro$Protein.Group),]
+View(df.wide)
+write.csv(df.wide, "output/betaInsGFP_proteomics_high_low_wide.csv", row.names = F)
+
+df.summary <- df.pro %>%
+  group_by(Genes, Group) %>%
+  summarise(
+    Protein.Group = Protein.Group[1],
+    Protein.Names = Protein.Names[1],
+    sd = sd(levels, na.rm = TRUE),
+    levels = mean(levels, na.rm = T),
+    n=n(),
+    se = sd / sqrt(n)
+  ) #%>%
+  #separate(col=Group, into = c("Tg", "EIF2A"), remove = F )
+View(df.summary)
+
+df.pro$Group <- factor(df.pro$Group,levels = c("LowGFP","HighGFP"))
+
+df.summary$Group <- factor(df.summary$Group,levels = c("LowGFP","HighGFP"))
+
+df.summary$Genes <- factor(df.summary$Genes, levels = de.df$Genes)
+
+GroupPalette <- c("paleturquoise3", "green4")
+names(GroupPalette) <- levels(df.summary$Group) 
+
+p <- ggplot(df.summary, aes(x=Protein.Names, y=levels, group = Group)) +
+  geom_bar(aes(fill=Group),color="black", stat = "identity", data = df.summary,
+           position=position_dodge(0.8),width = 0.7
+           #fill = NA, color = "black"
+  ) +
+  geom_jitter( data=df.pro , aes(linetype=Group),  
+               color= "black", shape = 21, 
+               fill="white", size=3, alpha = 0.8,
+    position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8)
+  ) +
+  
+  geom_errorbar(
+    aes(ymin = levels-se, ymax = levels+se,group=Group),
+    #data = df.summary, 
+    width = 0.2,
+    position = position_dodge(0.8)
+  ) +
+  scale_fill_manual(values = GroupPalette) +
+  scale_color_manual(values = GroupPalette) +
+  #scale_shape_manual(values=c(18,16,17,15))+ 
+  #scale_shape_manual(values=c(23,21,24,22))+ 
+  
+  labs(x="",y="Protein intensity (log2)")+
+  theme(axis.title = element_text(#family = "Roboto Light", 
+    color="black", size=16),
+    axis.ticks = element_line(colour="black"))+
+  theme(axis.text.x = element_text(#family = "Roboto Light",
+    color="black",size=16))+ #,hjust=1,angle = 45
+  theme(axis.text.y = element_text(#family = "Roboto Light",
+    color="black",size=16))+
+  theme(legend.text = element_text(#family = "Roboto Light",
+    color="black",size=16), 
+    legend.title = element_blank(),
+    legend.position = "right" #c(0.15,0.9)
+  )+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+
+  theme(strip.text = element_text(color="black",size=16), 
+        strip.background = element_rect(fill="white",color = "white"))
+p
+
+ggsave(p, filename = "figures/betaInsGFP_proteomics_high_low_barplots.pdf",width = 9, height = 5, units = "in")
+#ggsave("RNA_protein_barplots.svg", path="figures", width = 8, height = 20, units = "in")
+
+
+ggsave("RNA_protein_barplots_heatmapTop50.pdf", path="figures",width = 8, height = 44, units = "in", limitsize = FALSE)
+ggsave("RNA_protein_barplots_heatmapTop50.svg", path="figures", width = 8, height = 44, units = "in", limitsize = FALSE)
+```
+

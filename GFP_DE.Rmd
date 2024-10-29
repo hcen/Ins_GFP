@@ -1,0 +1,686 @@
+---
+title: "DE"
+author: "Howard Cen"
+date: "2024-10-01"
+output: html_document
+---
+
+
+```{r }
+library(tidyverse)
+library(readxl)
+
+
+
+if (!require("protti", quietly = TRUE))
+    devtools::install_github("jpquast/protti", dependencies = TRUE)
+
+if (!requireNamespace("tidyverse", quietly = TRUE))
+    install.packages("tidyverse")
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+library(protti) # Main proteomics analysis package
+# Load functions from utils.R
+source("utils.R")
+```
+
+```{r adjust pval}
+perseus.df <- read_excel("input/df.summary_proteomics.xlsx")
+
+perseus.df$padj <- p.adjust(perseus.df$pval, method = "BH")
+
+View(perseus.df)
+
+write.csv(perseus.df, "output/GFP_proteomics_perseus_DE_results_high_low.csv", row.names = F)
+```
+
+```{r protti}
+
+pro.anno <- read_excel("input/raw values.xlsx")
+View(pro.anno)
+pro <- read.delim("input/Mouse raw data non normalized.tsv")
+pro <- read.delim("input/Mouse raw data normalized.tsv")
+
+View(pro)
+colnames(pro)
+
+colnames(pro)[6:38] <- stringr::str_extract(colnames(pro)[6:38], "[A-Z0-9]+_[A-Za-z]+GFP")
+length(unique(pro$Protein.Group))==length(pro$Protein.Group)
+length(unique(pro$Genes))==length(pro$Genes)
+
+# remove F1_Low, F1_High, F4_High, F6_Low, F6_High, M4_High
+# remove F1_Neg, M4_Neg, M4_Low
+# remove F5, F6_Neg
+# remove F4
+# remove M5
+protein_data <- pro[c(grep("Group", colnames(pro)), grep("Neg", colnames(pro)), grep("Low", colnames(pro)), grep("High", colnames(pro)))]
+
+protein_data <- protein_data[-grep("F1_Low|F1_High|F4_High|F6_Low|F6_High|M4_High", colnames(protein_data))]
+
+protein_data <- protein_data[-grep("F1_Neg|M4_Neg|M4_Low", colnames(protein_data))]
+
+protein_data <- protein_data[-grep("F5|F6|F4", colnames(protein_data))]
+
+protein_data <- protein_data[-grep("M5", colnames(protein_data))]
+
+# protein_data <- protein_data[-grep("Neg", colnames(protein_data))] # removing Neg sample made the stats worse
+
+# kept proteins that are detected in at least 1/3 samples
+nrow(protein_data)
+protein_data <- protein_data[rowSums(is.na(protein_data[-1]))<ncol(protein_data[-1])*2/3,]
+  
+#  pro.dat1 <- protein_data[,grep("Group|High", colnames(protein_data))]
+#  pro.dat1 <- pro.dat1[rowSums(!is.na(pro.dat1))>=3,]
+  
+#  pro.dat2 <- protein_data[,grep("Group|Low", colnames(protein_data))]
+#  pro.dat2 <- pro.dat2[rowSums(!is.na(pro.dat2))>=3,]
+  
+#  id.filt <- intersect(pro.dat1$Protein.Group, pro.dat2$Protein.Group)
+  
+#protein_data <- protein_data %>% filter(Protein.Group %in% id.filt)
+
+nrow(protein_data)
+
+#protein_data <- protein_data[rowSums(is.na(protein_data[-1]))==0,]
+# 5940 --> 5298
+
+# meta data
+
+metadata <- data.frame(ID = colnames(protein_data)[-1]) %>%
+  mutate(Group = gsub("[A-Z][0-9]_", "", ID)) %>%
+  mutate(Group2 = ifelse(Group == "NegGFP", "NegGFP", "PosGFP"))
+View(metadata)
+
+```
+
+
+```{r}
+# Convert the peptide_data to long format
+protein_data_long <- tidyr::pivot_longer(
+    protein_data,
+    cols = -c("Protein.Group"),
+    names_to = "ID",
+    values_to = "Intensity"
+)
+head(protein_data_long)
+
+# Merge the metadata and peptide_data_longer
+protein_data_long <- dplyr::left_join(
+    protein_data_long,
+    metadata,
+    by = "ID"
+)
+
+# Rename the columns
+protein_data_long <- dplyr::rename(
+    protein_data_long,
+    "Protein" = "Protein.Group",
+    "Sample" = "ID"
+)
+
+# Create a log2 transformed intensity column
+protein_data_long$Intensity_log2 <- log2(protein_data_long$Intensity)
+
+
+```
+# BONUS 1 - Synthetic Data Generation
+# Creates 100 Proteins and their replicates with 5 replicates over 2 conditions
+#data <- protti::create_synthetic_data(
+#    n_proteins = 100,       # number of proteins
+#    frac_change = 0.05,
+#    n_replicates = 5,
+#    n_conditions = 2,
+#    method = "effect_random",
+#    additional_metadata = TRUE
+#)
+
+```{r}
+## Quality Checks and Data Filtering
+
+# 1. Number of Identified Proteins per Samples
+plot <- qc_ids(
+    data = protein_data_long,
+    sample = Sample,
+    grouping = Protein,
+    condition = Group,
+    intensity = Intensity,
+    plot = TRUE
+)
+
+# Visualize the plot
+
+# Sort the bars by the number of proteins
+plot + 
+  ggplot2::coord_flip() + 
+  ggplot2::theme(
+    axis.text.x = ggplot2::element_text(angle = 0, hjust = 0.5))
+
+
+# Rotate the x-axis labels
+plot + ggplot2::theme(
+    axis.text.x = ggplot2::element_text(angle = 90, hjust = 1, vjust = 0.5)
+)
+
+table(protein_data_long[!is.na(protein_data_long$Intensity),]$Sample)
+```
+```{r}
+pdf("IDcount.pdf", width = 8, height = 4)
+# Rotate the x-axis labels
+plot + ggplot2::theme(
+    axis.text.x = ggplot2::element_text(angle = 90, hjust = 1, vjust = 0.5)
+)
+dev.off()
+```
+
+
+
+```{r}
+
+# 2. Intensity Distribution and Median Intensity Plots
+#   a. Intensity Distribution
+qc_intensity_distribution(
+    data = protein_data_long,
+    sample = Sample,
+    grouping = Protein,
+    intensity_log2 = Intensity,
+    plot_style = "boxplot"
+)
+
+# Plot again with log2 transformed intensity
+qc_intensity_distribution(
+    data = protein_data_long,
+    sample = Sample,
+    grouping = Protein,
+    intensity_log2 = Intensity_log2,
+    plot_style = "boxplot"
+) + ggplot2::theme(
+    axis.text.x = ggplot2::element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+```{r}
+#   b. Median Intensity Plot
+qc_median_intensities(
+    data = protein_data_long,
+    sample = Sample,
+    grouping = Protein,
+    intensity = Intensity_log2
+) + ggplot2::theme(
+    axis.text.x = ggplot2::element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+
+```{r}
+
+# 3. Co-efficients of Variation (CV)
+# Within Sample CVs - Usually 10 or 20% are good
+qc_cvs(
+    data = protein_data_long,
+    grouping = Protein,
+    condition = Group,
+    intensity = Intensity,
+    plot = TRUE,
+    plot_style = "boxplot"
+    #max_cv = 1000
+)
+
+```
+
+```{r}
+# 4. Data Completeness -  what percentage of all detected precursors is present in each sample.
+qc_data_completeness(
+    data = protein_data_long,
+    sample = Sample,
+    grouping = Protein,
+    intensity = Intensity_log2,
+    plot = TRUE
+)
+
+```
+
+
+```{r}
+# 5. Sample Correlation
+# NOTE: Requires pheatmap & seriation packages
+#install.packages('seriation')
+
+qc_sample_correlation(
+    data = protein_data_long,
+    sample = Sample,
+    grouping = Protein,
+    intensity = Intensity_log2,
+    condition = Group,
+    interactive = FALSE,
+    method = "pearson"
+)
+# can't display the heatmap when it's ran inside code chunk. Works outside below
+
+
+```
+
+
+qc_sample_correlation(
+    data = protein_data_long,
+    sample = Sample,
+    grouping = Protein,
+    intensity = Intensity_log2,
+    condition = Group,
+    interactive = FALSE,
+    method = "pearson"
+)
+
+```{r}
+# 6. Principal Component Analysis (PCA)
+
+qc_pca(
+  data = protein_data_long,
+  sample = Sample,
+  grouping = Protein,
+  intensity = Intensity_log2,
+  condition = Group,
+  digestion = NULL,
+  plot_style = "scree"
+)
+```
+
+```{r}
+qc_pca(
+  data = protein_data_long,
+  sample = Sample,
+  grouping = Protein,
+  intensity = Intensity_log2,
+  condition = Group,
+  digestion = NULL,
+  plot_style = "pca"
+)
+```
+
+```{r}
+# 7. Ranked Intensity Distribution (Protein-Rank Plot)
+qc_ranked_intensities(
+  data = protein_data_long,
+  sample = Sample,
+  grouping = Protein,
+  intensity_log2 = Intensity_log2,
+  plot = TRUE,
+  y_axis_transformation = "log2"
+)
+
+```
+
+```{r, include=FALSE}
+# 8. Removing Problematic Samples
+# Remove instances where SampleName == "NP21"
+#protein_data_long <- dplyr::filter(
+#    protein_data_long,
+#    SampleName != "NP21"
+#)
+
+# 9. Removing Highly Missing Proteins
+# Remove proteins with missing values in more than 75% of samples
+# TODO: This is a custom solution, WIP
+
+
+#colnames(protein_data_long)
+#nsample <- length(unique(protein_data_long$Sample))
+#protein_data_long_filter <- protein_data_long %>%
+#  group_by(Protein) %>%
+#  filter(sum(is.na(Intensity_log2))<nsample*0.75)
+
+```
+
+
+
+```{r}
+## Data Normalization
+
+# Median Normalization using protti
+protein_data_long <- normalise(
+    data = protein_data_long,
+    sample = Sample,
+    intensity = Intensity_log2,
+    method = "median"
+) # Adds normalized_"intensity" column
+
+```
+
+```{r}
+b1 <- qc_median_intensities(
+    data = protein_data_long,
+    sample = Sample,
+    grouping = Protein,
+    intensity = Intensity_log2
+) + ggplot2::ggtitle("Before Normalization")
+
+b2 <- qc_median_intensities(
+    data = protein_data_long,
+    sample = Sample,
+    grouping = Protein,
+    intensity = normalised_intensity_log2
+) + ggplot2::ggtitle("After Normalization")
+
+# Plot the two plots side-by-side
+
+cowplot::plot_grid(
+    b1, b2,
+    ncol = 2
+)
+
+```
+```{r}
+qc_pca(
+  data = protein_data_long,
+  sample = Sample,
+  grouping = Protein,
+  intensity = normalised_intensity_log2,
+  condition = Group,
+  digestion = NULL,
+  plot_style = "pca"
+)
+
+```
+
+```{r save PCA}
+pdf("PCA_norm.pdf", width = 6.5, height = 5)
+qc_pca(
+  data = protein_data_long,
+  sample = Sample,
+  grouping = Protein,
+  intensity = normalised_intensity_log2,
+  condition = Group,
+  digestion = NULL,
+  plot_style = "pca"
+)
+dev.off()
+
+```
+
+```{r}
+
+pdf("PCA_norm_filter.pdf", width = 6.5, height = 5)
+qc_pca(
+  data = protein_data_long,
+  sample = Sample,
+  grouping = Protein,
+  intensity = normalised_intensity_log2,
+  condition = Group,
+  digestion = NULL,
+  plot_style = "pca"
+)
+dev.off()
+
+```
+
+qc_sample_correlation(
+    data = protein_data_long,
+    sample = Sample,
+    grouping = Protein,
+    intensity = normalised_intensity_log2,
+    condition = Group,
+    interactive = FALSE,
+    method = "pearson"
+)
+
+```{r}
+# Imputation of Missing Values
+
+# Impute missing values
+protein_data_long <- impute_with_downshifted_normal(
+    data = protein_data_long,
+    intensity_log2 = normalised_intensity_log2,
+    prctl = 0.05,
+    downshift_mag = 1.5,
+    downshift_min = 0.1
+)
+
+p1 <- qc_intensity_distribution(
+    data = protein_data_long,
+    sample = Sample,
+    grouping = Protein,
+    intensity_log2 = normalised_intensity_log2,
+    plot_style = "violin"
+) + ggplot2::theme(
+    axis.text.x = ggplot2::element_text(
+        angle = 90,
+        hjust = 1
+    )
+) + ggplot2::ggtitle(
+    "Non-Imputed Intensity Distribution"
+)
+
+
+p2 <- qc_intensity_distribution(
+    data = protein_data_long,
+    sample = Sample,
+    grouping = Protein,
+    intensity_log2 = imputed_intensity_log2,
+    plot_style = "violin"
+) + ggplot2::theme(
+    axis.text.x = ggplot2::element_text(
+        angle = 90,
+        hjust = 1
+    )
+) + ggplot2::ggtitle(
+    "Imputed Intensity Distribution"
+)
+
+cowplot::plot_grid(
+    p1, p2,
+    ncol = 2,
+    align = "v"
+)
+```
+
+```{r, Limma, include=FALSE}
+## Statistical Testing with Weighted Limma package
+
+# Transform the long to wide format
+# columns:Sample, rows: Protein, values: imputed_intensity_log2
+protein_data_wide <- protein_data_long %>%
+    dplyr::select(
+        Sample,
+        Protein,
+        imputed_intensity_log2
+    ) %>%
+    tidyr::pivot_wider(
+        names_from = Sample,
+        values_from = imputed_intensity_log2
+    ) %>%
+    tibble::column_to_rownames(
+        var = "Protein"
+    )
+head(protein_data_wide)
+
+write.csv(protein_data_wide, "output/betaInsGFP_proteomics_log2_norm_impute.csv")
+
+
+#protein_data_wide <- read.csv("output/liver_proteomics_log2_norm_impute.csv", row.names = 1)
+
+protein_data_wide_non_imputed <- protein_data_long %>%
+    dplyr::select(
+        Sample,
+        Protein,
+        normalised_intensity_log2
+    ) %>%
+    tidyr::pivot_wider(
+        names_from = Sample,
+        values_from = normalised_intensity_log2
+    ) %>%
+    tibble::column_to_rownames(
+        var = "Protein"
+    )
+
+write.csv(protein_data_wide_non_imputed, "output/betaInsGFP_proteomics_log2_norm_nonimpute.csv")
+
+
+#protein_data_wide_non_imputed <- read.csv("output/liver_proteomics_log2_norm_nonimpute.csv", row.names = 1)
+
+
+# Find the indices of the missing values
+na_index <- which(is.na(protein_data_wide_non_imputed))
+
+# Initialize the weight matrix
+weight_matrix <- matrix(
+    data = 1,
+    nrow = nrow(protein_data_wide),
+    ncol = ncol(protein_data_wide)
+)
+# Weighting of Missing Values
+na_weight <- 0.0001
+# Replace the missing values with the na_weight
+weight_matrix[na_index] <- na_weight
+
+head(weight_matrix)
+
+```
+
+```{r high vs low}
+# Create the design matrix
+
+group_levels <- c("NegGFP", "LowGFP", "HighGFP")
+
+#group_levels <- c("LowGFP", "HighGFP")
+f <- factor(metadata$Group, levels = group_levels)
+design <- model.matrix(~0+f)
+colnames(design) <- group_levels
+head(design) 
+
+# Variables
+pval_thr <- 0.05
+log2_fc_thr <- 0
+
+# Fit a linear model with weights
+fit <- limma::lmFit(
+    protein_data_wide,
+    design = design,
+    weights = weight_matrix
+)
+
+
+vs <- c(paste0(group_levels[3],"-",group_levels[2]))
+#vs <- c(paste0(group_levels[2],"-",group_levels[1]))
+
+contrast_matrix <- limma::makeContrasts(vs[1], #vs[2], vs[3], vs[4], 
+                                        levels = design)
+
+fit2 <- limma::contrasts.fit(fit, contrast_matrix)
+fit2 <- limma::eBayes(fit2)
+
+library(openxlsx)
+#library(org.Hs.eg.db)
+library(stringr)
+
+# Create a new Excel workbook
+wb <- createWorkbook()
+wb.filt <- createWorkbook()
+for (i in 1:length(vs)){
+  df <- limma::topTable(fit2, n=Inf, coef=i, adjust="BH") %>%
+    rownames_to_column(var = "Protein.Group")
+  
+  anno <- pro %>%
+    dplyr::select(any_of(c("Protein.Group", "Protein.Names", "Genes")))
+  
+  df <- df %>% left_join(anno) %>%
+    mutate(Protein.Names = gsub("_MOUSE", "", Protein.Names),
+           Genes = gsub("_MOUSE", "", Genes))
+
+    pro.dat1 <- protein_data_wide_non_imputed[,grep(unlist(str_split(vs[i], "-"))[1], colnames(protein_data_wide_non_imputed))]
+  pro.dat1 <- pro.dat1[rowSums(!is.na(pro.dat1))>=3,]
+  
+  pro.dat2 <- protein_data_wide_non_imputed[,grep(unlist(str_split(vs[i], "-"))[2], colnames(protein_data_wide_non_imputed))]
+  pro.dat2 <- pro.dat2[rowSums(!is.na(pro.dat2))>=3,]
+  id.filt <- intersect(rownames(pro.dat1), rownames(pro.dat2))
+  
+  df.filt <- df %>% 
+    filter(Protein.Group %in% id.filt)
+  
+  #save to workbook
+  addWorksheet(wb, vs[i])
+  writeData(wb, vs[i], df)
+  
+  addWorksheet(wb.filt, vs[i])
+  writeData(wb.filt, vs[i], df.filt)
+}
+
+saveWorkbook(wb, "output/betaInsGFP_proteomics_limma_DE_results_high_low_15.xlsx", overwrite = TRUE)
+saveWorkbook(wb.filt, "output/betaInsGFP_proteomics_limma_DE_results_high_low_filterN3_15.xlsx", overwrite = TRUE)
+```
+
+```{r pos vs neg}
+# Create the design matrix
+
+group_levels <- c("NegGFP", "PosGFP")
+f <- factor(metadata$Group2, levels = group_levels)
+design <- model.matrix(~0+f)
+colnames(design) <- group_levels
+head(design) 
+
+# Variables
+pval_thr <- 0.05
+log2_fc_thr <- 0
+
+# Fit a linear model with weights
+fit <- limma::lmFit(
+    protein_data_wide,
+    design = design,
+    weights = weight_matrix
+)
+
+
+vs <- c(paste0(group_levels[2],"-",group_levels[1]))
+
+contrast_matrix <- limma::makeContrasts(vs[1], #vs[2], vs[3], vs[4], 
+                                        levels = design)
+
+fit2 <- limma::contrasts.fit(fit, contrast_matrix)
+fit2 <- limma::eBayes(fit2)
+
+library(openxlsx)
+#library(org.Hs.eg.db)
+library(stringr)
+
+# Create a new Excel workbook
+wb <- createWorkbook()
+wb.filt <- createWorkbook()
+{
+  df <- limma::topTable(fit2, n=Inf, coef=1, adjust="BH") %>%
+    rownames_to_column(var = "Protein.Group")
+  
+  anno <- pro %>%
+    dplyr::select(any_of(c("Protein.Group", "Protein.Names", "Genes")))
+  df <- df %>% left_join(anno) %>%
+    mutate(Protein.Names = gsub("_MOUSE", "", Protein.Names),
+           Genes = gsub("_MOUSE", "", Genes))
+  
+  
+  pro.dat1 <- protein_data_wide_non_imputed[,grep("Neg", colnames(protein_data_wide_non_imputed))]
+  pro.dat1 <- pro.dat1[rowSums(!is.na(pro.dat1))>=3,]
+  
+  pro.dat2 <- protein_data_wide_non_imputed[,grep("High|Low", colnames(protein_data_wide_non_imputed))]
+  pro.dat2 <- pro.dat2[rowSums(!is.na(pro.dat2))>=3,]
+  id.filt <- intersect(rownames(pro.dat1), rownames(pro.dat2))
+  
+  df.filt <- df %>% 
+    filter(Protein.Group %in% id.filt)
+  
+  #save to workbook
+  addWorksheet(wb, vs[i])
+  writeData(wb, vs[i], df)
+  
+  addWorksheet(wb.filt, vs[i])
+  writeData(wb.filt, vs[i], df.filt)
+  
+}
+
+saveWorkbook(wb, "output/betaInsGFP_proteomics_limma_DE_results_pos_neg.xlsx", overwrite = TRUE)
+saveWorkbook(wb.filt, "output/betaInsGFP_proteomics_limma_DE_results_pos_neg_filterN3.xlsx", overwrite = TRUE)
+
+```
+
+```{r}
+df <- read_excel("output/betaInsGFP_proteomics_limma_DE_results_high_low_filterN3.xlsx")
+protein_data_wide_non_imputed_order <- protein_data_wide_non_imputed[df$Protein.Group,] %>%
+  rownames_to_column("Protein.Group") %>%
+  left_join(df[c("Protein.Group", "Protein.Names", "Genes")])
+View(protein_data_wide_non_imputed_order)
+write.csv(protein_data_wide_non_imputed_order, "output/betaInsGFP_proteomics_log2_norm_nonimpute_ordered.csv")
+
+protein_data_wide_non_imputed
+```
