@@ -17,15 +17,8 @@ colnames(df)
 
 df$Protein.Names <- gsub("_.*","",df$Protein.Names)
 
-plot.volcano(df = df, 
-             p_col = "adj.P.Val",
-             p_cutoff = 0.05,
-             log2FC_col = "logFC",
-             log2FC_cutoff = 0,
-             gene_num = 20,
-             gene_col = "Protein.Names", 
-             vs = "GFP.Positive_Negative",  # E.g. "0.75_0"
-             name = "betaInsGFP") # E.g. "islet" or "stem"
+df$Genes <- gsub(";.*","",df$Genes) 
+#df$Genes.plot <- toupper(df$Genes)
 
 plot.volcano <- function(df, p_col, p_cutoff, log2FC_col, log2FC_cutoff, gene_num, gene_col, vs, name){
   
@@ -64,17 +57,18 @@ plot.volcano <- function(df, p_col, p_cutoff, log2FC_col, log2FC_cutoff, gene_nu
   p <- ggplot(data=df.inf, #[plot.df$adj.p<0.05,],
               aes(x = !!rlang::sym(log2FC_col), y = log_padj 
               )) +
-    ylab(expression('-log10 adj.Pvalue')) + #-log[10]~(adj.~P~value)
-    xlab(paste0("log2(", gsub("_","/",vs),")")) +
+    ylab(expression(-log[10]~(P.value))) + #-log[10]~(adj.~P~value)
+    xlab(expression(log[2]~("GFP+/GFP-"))) + #(paste0("log2(", gsub("_","/",vs),")"))
     geom_point(data = df_ns,
                size = 2.5,
-               color = "grey", stroke = 0, alpha = 0.6) +
+               color = "grey", stroke = 0, alpha = 0.6
+               ) +
     geom_point(data = df_pos,
                size = 2.5,
-               color = "red3", stroke = 0, alpha = 0.6) +
+               color = "red", stroke = 0, alpha = 0.6) +
     geom_point(data = df_neg,
-               size = 2.5,
-               color = "blue3", stroke = 0, alpha = 0.6) +
+               size = 2.5, #2.5,
+               color = "blue", stroke = 0, alpha = 0.6) +
     #geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
     
     #ylim(c(NA, max((-log10( df[is.finite(-log10(df[[p_col]])),][[p_col]])))*1.3)) +
@@ -82,30 +76,36 @@ plot.volcano <- function(df, p_col, p_cutoff, log2FC_col, log2FC_cutoff, gene_nu
     ggrepel::geom_text_repel(
       data = df_pos, 
       aes(label = label),
-      color="red3",
-      size=4,
+      color="red",
+      size=6,
       nudge_x =  max(df[[log2FC_col]]) + max(abs(min(df[[log2FC_col]])),abs(max(df[[log2FC_col]])))*0.3 - df_pos[[log2FC_col]],
-      segment.size=0.1, 
-      #segment.color="grey", 
+      segment.size=0.3, 
+      segment.color="grey", 
+      force = 1.5,
       direction="y", 
-      hjust= 1, # adjusting this somehow reduced overlap
+      hjust= 0, # adjusting this somehow reduced overlap
       #max.iter = 100000,
+      #xlim = c(3.5, Inf),
       max.overlaps = Inf) +
     
     ggrepel::geom_text_repel(
       data = df_neg, 
       aes(label = label),
-      color="blue3",
-      size=4,
-      nudge_x =  min(df[[log2FC_col]]) - max(abs(min(df[[log2FC_col]])),abs(max(df[[log2FC_col]])))*0.3 - df_neg[[log2FC_col]],
-      segment.size=0.1, 
-      #segment.color="grey", 
+      color="blue",
+      size=6,
+      nudge_x =  min(df[[log2FC_col]]) - max(abs(min(df[[log2FC_col]])),abs(max(df[[log2FC_col]])))*0.8 - df_neg[[log2FC_col]],
+      segment.size=0.3, 
+      segment.color="grey", 
+      force = 2,
       direction="y", 
       hjust= 0, # adjusting this somehow reduced overlap
       #max.iter = 100000,
+      xlim = c(-Inf, -3.5),
       max.overlaps = Inf) +
     
     #ggtitle(name) +
+    
+    theme_minimal()+
     
     coord_cartesian(clip = "off") +
     
@@ -116,23 +116,38 @@ plot.volcano <- function(df, p_col, p_cutoff, log2FC_col, log2FC_cutoff, gene_nu
     ) +
     theme(panel.grid.minor.y = element_blank(),
           panel.grid.minor.x = element_blank(),
-          text=element_text(size=14),
-          axis.text=element_text(size=12),
-          axis.title=element_text(size=14),
-          legend.text=element_text(size=14),
-          legend.title=element_text(size=14),
-          aspect.ratio = 1/1.2, panel.grid.major = element_blank(),
-          panel.background = element_blank(), axis.line = element_line(colour = "black")) + 
+          text=element_text(size=20),
+          axis.text=element_text(size=16),
+          axis.title=element_text(size=20),
+          axis.ticks.length=unit(0.4, "cm"),
+          axis.ticks = element_line(colour = "black", size = 1),
+          legend.text=element_text(size=16),
+          legend.title=element_text(size=16),
+          legend.position = "top",
+          aspect.ratio = 1/1, 
+          panel.grid.major = element_blank(),
+          panel.background = element_blank(), 
+          axis.line = element_line(colour = "black")) + 
     theme(plot.title = element_text(hjust = 0.5, face = "italic", colour="grey30", size=15))
   
   fpath <- paste0("figures/volcano_", name, "_", vs)
   
   p
-  ggsave(paste0(fpath,".pdf"), height = 5.5, width = 5.5, units = "in")
+  ggsave(paste0(fpath,".pdf"), height = 6.5, width = 6.5, units = "in")
   
   p
-  ggsave(paste0(fpath,".svg"), height = 5.5, width = 5.5, units = "in")
+  ggsave(paste0(fpath,".svg"), height = 6.5, width = 6.5, units = "in")
 }
+
+plot.volcano(df = df, 
+             p_col = "adj.P.Val",
+             p_cutoff = 0.05,
+             log2FC_col = "logFC",
+             log2FC_cutoff = 0,
+             gene_num = 20,
+             gene_col = "Genes", 
+             vs = "GFP.Positive_Negative",  # E.g. "0.75_0"
+             name = "betaInsGFP") # E.g. "islet" or "stem"
 
 ```
 

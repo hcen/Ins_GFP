@@ -1,0 +1,192 @@
+---
+title: "FASTA"
+author: "Howard Cen"
+date: "2024-10-07"
+output: html_document
+---
+
+```{r setup}
+
+# Load necessary library
+library(stringr)
+library(org.Hs.eg.db)
+library(tidyverse)
+
+
+# Function to extract information from FASTA headers and save to CSV
+extract_info_to_csv <- function(fasta_file, output_csv) {
+  # Read the file
+  lines <- readLines(fasta_file)
+  
+  # Initialize an empty data frame to store the results
+  results <- data.frame(UniProt_ID = character(),
+                        Protein_Name = character(),
+                        Protein_Description = character(),
+                        Gene_Name = character(),
+                        stringsAsFactors = FALSE)
+  
+  # Loop through each line
+  for (line in lines) {
+    if (startsWith(line, ">")) {
+      # Use regular expressions to extract the required information
+      match <- str_match(line, ">sp\\|(\\w+)\\|(\\w+)_\\w+ (.+?) OS=.* GN=(\\w+)")
+      if (!is.na(match[1])) {
+        uniprot_id <- match[2]
+        protein_name <- match[3]
+        protein_description <- match[4]
+        gene_name <- match[5]
+        
+        # Append the extracted information to the data frame
+        results <- rbind(results, data.frame(UniProt_ID = uniprot_id,
+                                             Protein_Name = protein_name,
+                                             Protein_Description = protein_description,
+                                             Gene_Name = gene_name,
+                                             stringsAsFactors = FALSE))
+      }
+    }
+  }
+  
+  # Write the results to a CSV file
+  write.csv(results, output_csv, row.names = FALSE)
+  return(results)
+}
+
+# Replace 'your_fasta_file.fasta' with the path to your FASTA file
+# Replace 'output.csv' with the desired output CSV file name
+pro1 <- extract_info_to_csv('input/uniprot-Human_Reviewed_and_contaminant.fasta', 'output/reference_proteins.csv')
+pro2 <- extract_info_to_csv('input/uniprot-pro-INS,pro-glucagon,IAPP.fasta', 'output/reference_proteins2.csv')
+
+df <- read.csv('output/reference_proteins.csv')
+View(df)
+View(pro1) 
+View(pro2) 
+pro <- rbind(pro2, pro1)
+write.csv(pro, 'output/reference_proteins_combined.csv', row.names = FALSE)
+
+View(pro)
+
+rna <- read.csv("input/rawcount_anno.csv") 
+rna.coding <- rna %>%
+  dplyr::filter(gene_biotype == "protein_coding") 
+rna.coding$mean.RNA.count <- rowSums(rna.coding[grep("R[0-9]", colnames(rna.coding))])
+rna.coding <- rna.coding[-grep("R[0-9]", colnames(rna.coding))]
+View(rna.coding)
+nrow(rna.coding) # 19121
+
+rna.coding$entrezgene_id <- as.character(rna.coding$entrezgene_id)
+rna.coding$uniprot1 <- mapIds(org.Hs.eg.db, keys=c(rna.coding$ensembl_gene_id), column="UNIPROT", keytype="ENSEMBL", multiVals="first") %>% as.character()
+rna.coding$uniprot2 <- mapIds(org.Hs.eg.db, keys=c(rna.coding$entrezgene_id), column="UNIPROT", keytype="ENTREZID", multiVals="first") %>% as.character()
+rna.coding$uniprot3 <- mapIds(org.Hs.eg.db, keys=c(rna.coding$external_gene_name), column="UNIPROT", keytype="SYMBOL", multiVals="first") %>% as.character()
+
+rna.coding <- rna.coding %>% 
+  mutate(uniprot = coalesce(uniprot1, uniprot2, uniprot3), .keep = "unused")
+
+
+
+length(intersect(rna.coding$uniprot, pro$UniProt_ID)) # 13196
+
+length(intersect(rna.coding$external_gene_name, pro$Gene_Name)) # 18320
+
+missing <- rna.coding[!rna.coding$external_gene_name %in% pro$Gene_Name,]
+
+missing <- missing[!missing$uniprot %in% pro$UniProt_ID,]
+
+missing <- missing[missing$uniprot != "NULL",] %>% na.omit()
+
+# removed novel protein
+missing <- missing[missing$external_gene_name!="",]
+
+# remove readthrough protein
+missing <- missing[-grep("readthrough", missing$description),]
+View(missing)
+nrow(missing) # 83
+
+write.csv(missing, "output/human_islets_RNAseq_undetected_proteins.csv", row.names = F)
+
+missing$external_gene_name %in% pro$Gene_Name
+```
+
+```{r}
+cano.ref <- read.csv('output/reference_proteins_combined.csv')
+View(cano.ref)
+
+pro.cano <- read.delim("input/DIA_Canonical_report.pg_matrix.tsv")
+pro.iso <- read.delim("input/DIA_Isoform_report.pg_matrix.tsv")
+df <- read.delim("input/DIA_Canonical_report.pg_matrix.tsv")
+df <- read.delim("input/DIA_Canonical_report.pg_matrix.tsv")
+
+View(df)
+View(pro.cano)
+View(pro.iso)
+
+pro.cano.sep <- pro.cano %>%
+  separate_rows(Genes, sep = ";")
+
+pro.iso.sep <- pro.iso %>%
+  separate_rows(Genes, sep = ";")
+
+View(pro.cano.sep)
+View(pro.iso.sep)
+
+length(unique(pro.cano.sep$Genes)) #8978
+length(unique(pro.iso.sep$Genes)) #9226
+
+#common.gene <- intersect(pro.cano$Genes, pro.iso$Genes)
+#length(common.gene) # 9207
+
+common.gene <- intersect(unique(pro.cano.sep$Genes), unique(pro.iso.sep$Genes))
+length(common.gene) # 8672
+
+
+uni.cano <- unique(pro.cano.sep$Genes[pro.cano.sep$Genes %in% common.gene == FALSE])
+length(uni.cano) # 306 not in isoform
+
+uni.iso <- unique(pro.iso.sep$Genes[pro.iso.sep$Genes %in% common.gene == FALSE])
+length(uni.iso) # 554 not in canonical
+
+df.uni.cano <- pro.cano.sep %>% filter(Genes %in% uni.cano)
+df.uni.iso <- pro.iso.sep %>% filter(Genes %in% uni.iso)
+View(df.uni.cano)
+View(df.uni.iso)
+
+all(uni.cano %in% cano.ref$Gene_Name) # 
+
+uni.cano[uni.cano %in% cano.ref$Gene_Name == FALSE] # H3-2 is named differently. H3C1 gene, H31 protein, P68431 uniprot in library. All in library
+
+iso.not.found <- uni.iso[uni.iso %in% cano.ref$Gene_Name] # 368
+iso.not.library <- uni.iso[uni.iso %in% cano.ref$Gene_Name == FALSE] # 186
+
+df.iso.not.found <- df.uni.iso %>% filter(Genes %in% iso.not.found) %>%
+  group_by(Protein.Group) %>%
+  summarize(across(everything(), ~ paste(unique(.), collapse = ";"))) # 338
+
+df.iso.not.library <- df.uni.iso %>% filter(Genes %in% iso.not.library) %>%
+  group_by(Protein.Group) %>%
+  summarize(across(everything(), ~ paste(unique(.), collapse = ";"))) # 487
+
+df.iso.not.found.sep <- df.iso.not.found %>% separate_rows(Genes, sep = ";")
+length(unique(df.iso.not.found.sep$Genes)) # 368
+
+df.iso.not.library.sep <- df.iso.not.library %>% separate_rows(Genes, sep = ";")
+length(unique(df.iso.not.library.sep$Genes)) # 186
+
+
+df.iso.not.found$Detected = rowSums((df.iso.not.found[grep("Data", colnames(df.iso.not.found))] != "NA"))
+
+df.iso.not.library$Detected = rowSums((df.iso.not.library[grep("Data", colnames(df.iso.not.library))] != "NA"))
+
+View(df.iso.not.found)
+View(df.iso.not.library)
+
+library(openxlsx)
+wb <- createWorkbook()
+
+addWorksheet(wb, "In_library_not_found")
+writeData(wb, "In_library_not_found", df.iso.not.found)
+
+addWorksheet(wb, "Not_in_library")
+writeData(wb, "Not_in_library", df.iso.not.library)
+
+saveWorkbook(wb, "output/DIA_isoform_new_detect.xlsx", overwrite = TRUE)
+```
+
